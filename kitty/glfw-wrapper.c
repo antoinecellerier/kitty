@@ -50,6 +50,9 @@ load_glfw(const char* path) {
     *(void **) (&glfwIsLayerShellSupported_impl) = dlsym(handle, "glfwIsLayerShellSupported");
     if (glfwIsLayerShellSupported_impl == NULL) fail("Failed to load glfw function glfwIsLayerShellSupported with error: %s", dlerror());
 
+    *(void **) (&glfwIsLibdecorLoaded_impl) = dlsym(handle, "glfwIsLibdecorLoaded");
+    if (glfwIsLibdecorLoaded_impl == NULL) fail("Failed to load glfw function glfwIsLibdecorLoaded with error: %s", dlerror());
+
     *(void **) (&glfwTerminate_impl) = dlsym(handle, "glfwTerminate");
     if (glfwTerminate_impl == NULL) fail("Failed to load glfw function glfwTerminate with error: %s", dlerror());
 

@@ -476,7 +476,10 @@ inform_compositor_of_window_geometry(_GLFWwindow *window, const char *event) {
 #define geometry window->wl.decorations.geometry
     debug("Setting window %llu \"visible area\" geometry in %s event: x=%d y=%d %dx%d viewport: %dx%d\n",
             window->id, event, geometry.x, geometry.y, geometry.width, geometry.height, window->wl.width, window->wl.height);
-    xdg_surface_set_window_geometry(window->wl.xdg.surface, geometry.x, geometry.y, geometry.width, geometry.height);
+    // libdecor sets window geometry itself in frame_commit, skip to avoid
+    // overriding the decoration border offsets it computed.
+    if (!window->wl.libdecorFrame)
+        xdg_surface_set_window_geometry(window->wl.xdg.surface, geometry.x, geometry.y, geometry.width, geometry.height);
     if (window->wl.wp_viewport) wp_viewport_set_destination(window->wl.wp_viewport, window->wl.width, window->wl.height);
 #undef geometry
 }
@@ -654,8 +657,13 @@ setFullscreen(_GLFWwindow* window, _GLFWmonitor* monitor, bool on) {
         _glfwInputError(GLFW_PLATFORM_ERROR, "Wayland compositor does not support fullscreen");
         return;
     }
-    if (on) xdg_toplevel_set_fullscreen(window->wl.xdg.toplevel, monitor ? monitor->wl.output : NULL);
-    else xdg_toplevel_unset_fullscreen(window->wl.xdg.toplevel);
+    if (window->wl.libdecorFrame) {
+        if (on) _glfw.wl.libdecor.frame_set_fullscreen(window->wl.libdecorFrame, monitor ? monitor->wl.output : NULL);
+        else _glfw.wl.libdecor.frame_unset_fullscreen(window->wl.libdecorFrame);
+    } else {
+        if (on) xdg_toplevel_set_fullscreen(window->wl.xdg.toplevel, monitor ? monitor->wl.output : NULL);
+        else xdg_toplevel_unset_fullscreen(window->wl.xdg.toplevel);
+    }
 }
 
 
@@ -976,9 +984,137 @@ static const struct xdg_surface_listener xdgSurfaceListener = {
     xdgSurfaceHandleConfigure
 };
 
+// libdecor callbacks
+static WaylandWindowState
+libdecor_state_to_wl_state(enum libdecor_window_state state)
+{
+    WaylandWindowState wl_states = TOPLEVEL_STATE_NONE;
+    if (state & LIBDECOR_WINDOW_STATE_ACTIVE)
+        wl_states |= TOPLEVEL_STATE_ACTIVATED;
+    if (state & LIBDECOR_WINDOW_STATE_MAXIMIZED)
+        wl_states |= TOPLEVEL_STATE_MAXIMIZED;
+    if (state & LIBDECOR_WINDOW_STATE_FULLSCREEN)
+        wl_states |= TOPLEVEL_STATE_FULLSCREEN;
+    if (state & LIBDECOR_WINDOW_STATE_TILED_LEFT)
+        wl_states |= TOPLEVEL_STATE_TILED_LEFT;
+    if (state & LIBDECOR_WINDOW_STATE_TILED_RIGHT)
+        wl_states |= TOPLEVEL_STATE_TILED_RIGHT;
+    if (state & LIBDECOR_WINDOW_STATE_TILED_TOP)
+        wl_states |= TOPLEVEL_STATE_TILED_TOP;
+    if (state & LIBDECOR_WINDOW_STATE_TILED_BOTTOM)
+        wl_states |= TOPLEVEL_STATE_TILED_BOTTOM;
+    return wl_states;
+}
+
+static void
+libdecorFrameHandleConfigure(struct libdecor_frame *frame,
+                             struct libdecor_configuration *configuration,
+                             void *user_data)
+{
+    _GLFWwindow* window = user_data;
+    int width = 0, height = 0;
+    enum libdecor_window_state window_state = LIBDECOR_WINDOW_STATE_NONE;
+
+    if (_glfw.wl.libdecor.configuration_get_content_size(configuration, frame, &width, &height)) {
+        // libdecor provides content size
+    }
+
+    if (!_glfw.wl.libdecor.configuration_get_window_state(configuration, &window_state)) {
+        window_state = LIBDECOR_WINDOW_STATE_NONE;
+    }
+
+    WaylandWindowState new_states = libdecor_state_to_wl_state(window_state);
+    debug("libdecor configure event for window %llu: size: %dx%d states: 0x%x\n",
+          window->id, width, height, new_states);
+
+    // libdecor does not expose an explicit "resizing" window state, so keep
+    // the requested content size in sync whenever floating content size is sent.
+    if (width > 0 && height > 0 &&
+        !(new_states & (TOPLEVEL_STATE_FULLSCREEN | TOPLEVEL_STATE_MAXIMIZED | TOPLEVEL_STATE_DOCKED))) {
+        window->wl.user_requested_content_size.width = width;
+        window->wl.user_requested_content_size.height = height;
+    }
+
+    if (new_states & TOPLEVEL_STATE_RESIZING) {
+        if (!(window->wl.current.toplevel_states & TOPLEVEL_STATE_RESIZING)) report_live_resize(window, true);
+    }
+
+    if (width != 0 && height != 0) {
+        if (!(new_states & TOPLEVEL_STATE_DOCKED)) {
+            if (window->numer != GLFW_DONT_CARE && window->denom != GLFW_DONT_CARE) {
+                float aspectRatio = (float)width / (float)height;
+                float targetRatio = (float)window->numer / (float)window->denom;
+                if (aspectRatio < targetRatio)
+                    height = (int32_t)((float)width / targetRatio);
+                else if (aspectRatio > targetRatio)
+                    width = (int32_t)((float)height * targetRatio);
+            }
+        }
+    }
+
+    window->wl.pending.toplevel_states = new_states;
+    window->wl.pending.width = width;
+    window->wl.pending.height = height;
+    window->wl.pending_state |= PENDING_STATE_TOPLEVEL;
+
+    // Apply content changes FIRST (resize framebuffer, update viewport) so that
+    // when we commit the frame, both decorations and content are in sync.
+    apply_xdg_configure_changes(window);
+
+    // Now commit to libdecor — this draws decorations, sets window geometry,
+    // and acks the configure serial atomically.
+    struct libdecor_state *state = _glfw.wl.libdecor.state_new(
+        window->wl.width, window->wl.height);
+    _glfw.wl.libdecor.frame_commit(frame, state, configuration);
+    _glfw.wl.libdecor.state_free(state);
+
+    if (!window->wl.window_fully_created) {
+        if (!attach_temp_buffer_during_window_creation(window)) window->wl.window_fully_created = true;
+    }
+}
+
+static void
+libdecorFrameHandleClose(struct libdecor_frame *frame UNUSED, void *user_data)
+{
+    _GLFWwindow* window = user_data;
+    window->wl.window_fully_created = true;
+    _glfwInputWindowCloseRequest(window);
+}
+
+static void
+libdecorFrameHandleCommit(struct libdecor_frame *frame UNUSED, void *user_data)
+{
+    _GLFWwindow* window = user_data;
+    commit_window_surface_if_safe(window);
+}
+
+static void
+libdecorFrameHandleDismissPopup(struct libdecor_frame *frame UNUSED,
+                                const char *seat_name UNUSED,
+                                void *user_data UNUSED)
+{
+}
+
+static struct libdecor_frame_interface libdecorFrameInterface = {
+    .configure = libdecorFrameHandleConfigure,
+    .close = libdecorFrameHandleClose,
+    .commit = libdecorFrameHandleCommit,
+    .dismiss_popup = libdecorFrameHandleDismissPopup,
+};
+
 static void
 setXdgDecorations(_GLFWwindow* window)
 {
+    if (window->wl.libdecorFrame) {
+        // libdecor has no border-only mode. For titlebar-only, hide libdecor
+        // decorations and use kitty CSD for resize borders.
+        bool titlebar_only = window->decorated && window->wl.decorations.titlebar_hidden;
+        bool visible = window->decorated && !window->wl.decorations.titlebar_hidden;
+        if (_glfw.wl.libdecor.frame_set_visibility)
+            _glfw.wl.libdecor.frame_set_visibility(window->wl.libdecorFrame, visible);
+        csd_set_visible(window, titlebar_only && csd_should_window_be_decorated(window));
+        return;
+    }
     if (window->wl.xdg.decoration) {
         if (window->wl.decorations.titlebar_hidden) {
             window->wl.decorations.serverSide = false;
@@ -1201,6 +1337,71 @@ create_window_desktop_surface(_GLFWwindow* window)
 {
     if (is_layer_shell(window)) return create_layer_shell_surface(window);
 
+    // libdecor path: use libdecor for window decoration when available
+    if (_glfw.wl.libdecor.context && !window->wl.decorations.titlebar_hidden) {
+        window->wl.libdecorFrame = _glfw.wl.libdecor.decorate(
+            _glfw.wl.libdecor.context, window->wl.surface,
+            &libdecorFrameInterface, window);
+        if (!window->wl.libdecorFrame) {
+            _glfwInputError(GLFW_PLATFORM_ERROR,
+                            "Wayland: libdecor frame creation failed");
+            return false;
+        }
+
+        // Retrieve the xdg_surface/toplevel that libdecor created internally
+        window->wl.xdg.surface = _glfw.wl.libdecor.frame_get_xdg_surface(window->wl.libdecorFrame);
+        window->wl.xdg.toplevel = _glfw.wl.libdecor.frame_get_xdg_toplevel(window->wl.libdecorFrame);
+
+        if (!window->wl.xdg.toplevel) {
+            _glfwInputError(GLFW_PLATFORM_ERROR,
+                            "Wayland: failed to get xdg-toplevel from libdecor");
+            _glfw.wl.libdecor.frame_unref(window->wl.libdecorFrame);
+            window->wl.libdecorFrame = NULL;
+            window->wl.xdg.surface = NULL;
+            window->wl.xdg.toplevel = NULL;
+            return false;
+        }
+
+        // Assume all capabilities with libdecor
+        window->wl.wm_capabilities.maximize = true;
+        window->wl.wm_capabilities.minimize = true;
+        window->wl.wm_capabilities.fullscreen = true;
+        window->wl.wm_capabilities.window_menu = true;
+
+        if (window->wl.appId[0])
+            _glfw.wl.libdecor.frame_set_app_id(window->wl.libdecorFrame, window->wl.appId);
+
+        if (window->wl.title)
+            _glfw.wl.libdecor.frame_set_title(window->wl.libdecorFrame, window->wl.title);
+
+        if (window->minwidth != GLFW_DONT_CARE && window->minheight != GLFW_DONT_CARE)
+            _glfw.wl.libdecor.frame_set_min_content_size(window->wl.libdecorFrame,
+                                                          window->minwidth, window->minheight);
+        if (window->maxwidth != GLFW_DONT_CARE && window->maxheight != GLFW_DONT_CARE)
+            _glfw.wl.libdecor.frame_set_max_content_size(window->wl.libdecorFrame,
+                                                          window->maxwidth, window->maxheight);
+
+        if (!window->decorated && _glfw.wl.libdecor.frame_set_visibility)
+            _glfw.wl.libdecor.frame_set_visibility(window->wl.libdecorFrame, false);
+
+        if (window->monitor) {
+            _glfw.wl.libdecor.frame_set_fullscreen(window->wl.libdecorFrame, window->monitor->wl.output);
+        } else {
+            if (window->wl.maximize_on_first_show) {
+                window->wl.maximize_on_first_show = false;
+                _glfw.wl.libdecor.frame_set_maximized(window->wl.libdecorFrame);
+            }
+        }
+
+        _glfw.wl.libdecor.frame_map(window->wl.libdecorFrame);
+        wl_display_roundtrip(_glfw.wl.display);
+        window->wl.created = true;
+        debug("Window %llu created with libdecor decorations\n", window->id);
+
+        return true;
+    }
+
+    // Standard xdg-shell path (no libdecor)
     window->wl.xdg.surface = xdg_wm_base_get_xdg_surface(_glfw.wl.wmBase,
                                                          window->wl.surface);
     if (!window->wl.xdg.surface)
@@ -1372,6 +1573,8 @@ static void handleEvents(monotonic_t timeout)
         (void)num;
         EVDBG("dispatched %d Wayland events", num);
     }
+    if (_glfw.wl.libdecor.context)
+        _glfw.wl.libdecor.dispatch(_glfw.wl.libdecor.context, 0);
     glfw_ibus_dispatch(&_glfw.wl.xkb.ibus);
     glfw_dbus_session_bus_dispatch();
     EVDBG("other dispatch done");
@@ -1551,11 +1754,26 @@ void _glfwPlatformDestroyWindow(_GLFWwindow* window)
     if (window->wl.native)
         wl_egl_window_destroy(window->wl.native);
 
-    if (window->wl.xdg.toplevel)
-        xdg_toplevel_destroy(window->wl.xdg.toplevel);
+    if (window->wl.libdecorFrame) {
+        // libdecor owns the xdg_surface/xdg_toplevel, so we must not destroy them.
+        // Dispatch pending libdecor events before destroying the frame so the
+        // plugin can process any outstanding protocol messages.
+        if (_glfw.wl.libdecor.context)
+            _glfw.wl.libdecor.dispatch(_glfw.wl.libdecor.context, 0);
+        _glfw.wl.libdecor.frame_unref(window->wl.libdecorFrame);
+        window->wl.libdecorFrame = NULL;
+        window->wl.xdg.toplevel = NULL;
+        window->wl.xdg.surface = NULL;
+        if (_glfw.wl.display) {
+            wl_display_flush(_glfw.wl.display);
+        }
+    } else {
+        if (window->wl.xdg.toplevel)
+            xdg_toplevel_destroy(window->wl.xdg.toplevel);
 
-    if (window->wl.xdg.surface)
-        xdg_surface_destroy(window->wl.xdg.surface);
+        if (window->wl.xdg.surface)
+            xdg_surface_destroy(window->wl.xdg.surface);
+    }
 
     if (window->wl.layer_shell.zwlr_layer_surface_v1)
         zwlr_layer_surface_v1_destroy(window->wl.layer_shell.zwlr_layer_surface_v1);
@@ -1579,8 +1797,12 @@ void _glfwPlatformSetWindowTitle(_GLFWwindow* window, const char* title)
     // one causes an abort(). Since titles this large are meaningless anyway
     // ensure they do not happen.
     window->wl.title = utf_8_strndup(title, 2048);
-    if (window->wl.xdg.toplevel) {
+    if (window->wl.libdecorFrame) {
+        _glfw.wl.libdecor.frame_set_title(window->wl.libdecorFrame, window->wl.title);
+    } else if (window->wl.xdg.toplevel) {
         xdg_toplevel_set_title(window->wl.xdg.toplevel, window->wl.title);
+    }
+    if (window->wl.xdg.toplevel) {
         csd_change_title(window);
         commit_window_surface_if_safe(window);
     }
@@ -1689,12 +1911,16 @@ void _glfwPlatformSetWindowSizeLimits(_GLFWwindow* window,
                                       int minwidth, int minheight,
                                       int maxwidth, int maxheight)
 {
-    if (window->wl.xdg.toplevel)
-    {
-        if (minwidth == GLFW_DONT_CARE || minheight == GLFW_DONT_CARE)
-            minwidth = minheight = 0;
-        if (maxwidth == GLFW_DONT_CARE || maxheight == GLFW_DONT_CARE)
-            maxwidth = maxheight = 0;
+    if (minwidth == GLFW_DONT_CARE || minheight == GLFW_DONT_CARE)
+        minwidth = minheight = 0;
+    if (maxwidth == GLFW_DONT_CARE || maxheight == GLFW_DONT_CARE)
+        maxwidth = maxheight = 0;
+
+    if (window->wl.libdecorFrame) {
+        _glfw.wl.libdecor.frame_set_min_content_size(window->wl.libdecorFrame, minwidth, minheight);
+        _glfw.wl.libdecor.frame_set_max_content_size(window->wl.libdecorFrame, maxwidth, maxheight);
+        commit_window_surface_if_safe(window);
+    } else if (window->wl.xdg.toplevel) {
         xdg_toplevel_set_min_size(window->wl.xdg.toplevel, minwidth, minheight);
         xdg_toplevel_set_max_size(window->wl.xdg.toplevel, maxwidth, maxheight);
         commit_window_surface_if_safe(window);
@@ -1763,7 +1989,9 @@ monotonic_t _glfwPlatformGetDoubleClickInterval(_GLFWwindow* window UNUSED)
 
 void _glfwPlatformIconifyWindow(_GLFWwindow* window)
 {
-    if (window->wl.xdg.toplevel) {
+    if (window->wl.libdecorFrame) {
+        _glfw.wl.libdecor.frame_set_minimized(window->wl.libdecorFrame);
+    } else if (window->wl.xdg.toplevel) {
         if (window->wl.wm_capabilities.minimize) xdg_toplevel_set_minimized(window->wl.xdg.toplevel);
         else _glfwInputError(GLFW_PLATFORM_ERROR, "Wayland compositor does not support minimizing windows");
     }
@@ -1771,8 +1999,12 @@ void _glfwPlatformIconifyWindow(_GLFWwindow* window)
 
 void _glfwPlatformRestoreWindow(_GLFWwindow* window)
 {
-    if (window->wl.xdg.toplevel)
-    {
+    if (window->wl.libdecorFrame) {
+        if (window->monitor)
+            _glfw.wl.libdecor.frame_unset_fullscreen(window->wl.libdecorFrame);
+        if (window->wl.current.toplevel_states & TOPLEVEL_STATE_MAXIMIZED)
+            _glfw.wl.libdecor.frame_unset_maximized(window->wl.libdecorFrame);
+    } else if (window->wl.xdg.toplevel) {
         if (window->monitor)
             xdg_toplevel_unset_fullscreen(window->wl.xdg.toplevel);
         if (window->wl.current.toplevel_states & TOPLEVEL_STATE_MAXIMIZED)
@@ -1785,7 +2017,9 @@ void _glfwPlatformRestoreWindow(_GLFWwindow* window)
 
 void _glfwPlatformMaximizeWindow(_GLFWwindow* window)
 {
-    if (window->wl.xdg.toplevel) {
+    if (window->wl.libdecorFrame) {
+        _glfw.wl.libdecor.frame_set_maximized(window->wl.libdecorFrame);
+    } else if (window->wl.xdg.toplevel) {
         if (window->wl.wm_capabilities.maximize) xdg_toplevel_set_maximized(window->wl.xdg.toplevel);
         else _glfwInputError(GLFW_PLATFORM_ERROR, "Wayland compositor does not support maximizing windows");
     }
@@ -3077,6 +3311,9 @@ _glfwPlatformGetLayerShellConfig(_GLFWwindow *window) {
 }
 
 GLFWAPI bool glfwIsLayerShellSupported(void) { return _glfw.wl.zwlr_layer_shell_v1 != NULL; }
+
+extern bool _glfw_libdecor_was_loaded;
+GLFWAPI bool glfwIsLibdecorLoaded(void) { return _glfw_libdecor_was_loaded; }
 
 GLFWAPI bool glfwWaylandIsWindowFullyCreated(GLFWwindow *handle) { return handle != NULL && ((_GLFWwindow*)handle)->wl.window_fully_created; }
 

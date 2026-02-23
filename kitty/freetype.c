@@ -9,6 +9,7 @@
 #include "colors.h"
 #include "cleanup.h"
 #include "state.h"
+#include "glfw-wrapper.h"
 #include <math.h>
 #include <structmember.h>
 #include <ft2build.h>
@@ -1384,7 +1385,11 @@ PyTypeObject Face_Type = {
 
 static void
 free_freetype(void) {
-    cairo_debug_reset_static_data();
+    // cairo_debug_reset_static_data() asserts all hash entries are freed.
+    // When libdecor is loaded its GTK/cairo plugin holds live cairo surfaces
+    // that outlive this atexit handler, triggering the assertion.
+    if (!glfwIsLibdecorLoaded())
+        cairo_debug_reset_static_data();
     FT_Done_FreeType(library);
 }
 

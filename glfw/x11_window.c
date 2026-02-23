@@ -688,6 +688,7 @@ calculate_layer_geometry(_GLFWwindow *window) {
 }
 
 GLFWAPI bool glfwIsLayerShellSupported(void) { return _glfw.x11.NET_WM_WINDOW_TYPE != 0 && _glfw.x11.NET_WM_STATE != 0; }
+GLFWAPI bool glfwIsLibdecorLoaded(void) { return false; }
 
 
 static bool

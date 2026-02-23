@@ -1878,6 +1878,10 @@ typedef bool (*glfwIsLayerShellSupported_func)(void);
 GFW_EXTERN glfwIsLayerShellSupported_func glfwIsLayerShellSupported_impl;
 #define glfwIsLayerShellSupported glfwIsLayerShellSupported_impl
 
+typedef bool (*glfwIsLibdecorLoaded_func)(void);
+GFW_EXTERN glfwIsLibdecorLoaded_func glfwIsLibdecorLoaded_impl;
+#define glfwIsLibdecorLoaded glfwIsLibdecorLoaded_impl
+
 typedef void (*glfwTerminate_func)(void);
 GFW_EXTERN glfwTerminate_func glfwTerminate_impl;
 #define glfwTerminate glfwTerminate_impl

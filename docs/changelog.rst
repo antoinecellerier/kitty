@@ -243,6 +243,11 @@ Detailed list of changes
 - Wayland: Add support for :code:`titlebar-only` in :opt:`hide_window_decorations`
   to hide the titlebar while keeping shadows for window resizing. (:pull:`9486`)
 
+- Wayland: On compositors without xdg-decoration support (such as GNOME),
+  load libdecor at runtime to provide native window decorations. In
+  :opt:`hide_window_decorations` ``titlebar-only`` mode, keep resize borders
+  using kitty CSD since libdecor has no border-only mode.
+
 
 0.45.0 [2025-12-24]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

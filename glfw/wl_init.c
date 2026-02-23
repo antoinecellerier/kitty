@@ -43,6 +43,9 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <wayland-client.h>
+
+// Persists beyond _glfwPlatformTerminate so atexit handlers can check it
+bool _glfw_libdecor_was_loaded = false;
 #include <stdio.h>
 // errno.h needed for BSD code paths
 #include <errno.h>
@@ -801,6 +804,18 @@ get_compositor_missing_capabilities(void) {
 
 GLFWAPI const char* glfwWaylandMissingCapabilities(void) { return get_compositor_missing_capabilities(); }
 
+static void
+_glfwLibdecorError(struct libdecor *context UNUSED,
+                   enum libdecor_error error,
+                   const char *message)
+{
+    _glfwInputError(GLFW_PLATFORM_ERROR, "libdecor error %d: %s", error, message);
+}
+
+static struct libdecor_interface _glfwLibdecorInterface = {
+    .error = _glfwLibdecorError,
+};
+
 int _glfwPlatformInit(bool *supports_window_occlusion)
 {
     int i;
@@ -861,6 +876,77 @@ int _glfwPlatformInit(bool *supports_window_occlusion)
     // Sync so we got all initial output events
     wl_display_roundtrip(_glfw.wl.display);
 
+    // If compositor doesn't support server-side decorations, try libdecor
+    if (!_glfw.wl.decorationManager) {
+        _glfw.wl.libdecor.handle = _glfw_dlopen("libdecor-0.so.0");
+        if (_glfw.wl.libdecor.handle) {
+            glfw_dlsym(_glfw.wl.libdecor.new_, _glfw.wl.libdecor.handle, "libdecor_new");
+            glfw_dlsym(_glfw.wl.libdecor.unref, _glfw.wl.libdecor.handle, "libdecor_unref");
+            glfw_dlsym(_glfw.wl.libdecor.get_fd, _glfw.wl.libdecor.handle, "libdecor_get_fd");
+            glfw_dlsym(_glfw.wl.libdecor.dispatch, _glfw.wl.libdecor.handle, "libdecor_dispatch");
+            glfw_dlsym(_glfw.wl.libdecor.decorate, _glfw.wl.libdecor.handle, "libdecor_decorate");
+            glfw_dlsym(_glfw.wl.libdecor.frame_unref, _glfw.wl.libdecor.handle, "libdecor_frame_unref");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_app_id, _glfw.wl.libdecor.handle, "libdecor_frame_set_app_id");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_title, _glfw.wl.libdecor.handle, "libdecor_frame_set_title");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_minimized, _glfw.wl.libdecor.handle, "libdecor_frame_set_minimized");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_maximized, _glfw.wl.libdecor.handle, "libdecor_frame_set_maximized");
+            glfw_dlsym(_glfw.wl.libdecor.frame_unset_maximized, _glfw.wl.libdecor.handle, "libdecor_frame_unset_maximized");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_fullscreen, _glfw.wl.libdecor.handle, "libdecor_frame_set_fullscreen");
+            glfw_dlsym(_glfw.wl.libdecor.frame_unset_fullscreen, _glfw.wl.libdecor.handle, "libdecor_frame_unset_fullscreen");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_capabilities, _glfw.wl.libdecor.handle, "libdecor_frame_set_capabilities");
+            glfw_dlsym(_glfw.wl.libdecor.frame_unset_capabilities, _glfw.wl.libdecor.handle, "libdecor_frame_unset_capabilities");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_visibility, _glfw.wl.libdecor.handle, "libdecor_frame_set_visibility");
+            glfw_dlsym(_glfw.wl.libdecor.frame_is_visible, _glfw.wl.libdecor.handle, "libdecor_frame_is_visible");
+            glfw_dlsym(_glfw.wl.libdecor.frame_is_floating, _glfw.wl.libdecor.handle, "libdecor_frame_is_floating");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_max_content_size, _glfw.wl.libdecor.handle, "libdecor_frame_set_max_content_size");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_min_content_size, _glfw.wl.libdecor.handle, "libdecor_frame_set_min_content_size");
+            glfw_dlsym(_glfw.wl.libdecor.frame_resize, _glfw.wl.libdecor.handle, "libdecor_frame_resize");
+            glfw_dlsym(_glfw.wl.libdecor.frame_move, _glfw.wl.libdecor.handle, "libdecor_frame_move");
+            glfw_dlsym(_glfw.wl.libdecor.frame_commit, _glfw.wl.libdecor.handle, "libdecor_frame_commit");
+            glfw_dlsym(_glfw.wl.libdecor.frame_set_parent, _glfw.wl.libdecor.handle, "libdecor_frame_set_parent");
+            glfw_dlsym(_glfw.wl.libdecor.frame_get_xdg_surface, _glfw.wl.libdecor.handle, "libdecor_frame_get_xdg_surface");
+            glfw_dlsym(_glfw.wl.libdecor.frame_get_xdg_toplevel, _glfw.wl.libdecor.handle, "libdecor_frame_get_xdg_toplevel");
+            glfw_dlsym(_glfw.wl.libdecor.frame_map, _glfw.wl.libdecor.handle, "libdecor_frame_map");
+            glfw_dlsym(_glfw.wl.libdecor.frame_translate_coordinate, _glfw.wl.libdecor.handle, "libdecor_frame_translate_coordinate");
+            glfw_dlsym(_glfw.wl.libdecor.state_new, _glfw.wl.libdecor.handle, "libdecor_state_new");
+            glfw_dlsym(_glfw.wl.libdecor.state_free, _glfw.wl.libdecor.handle, "libdecor_state_free");
+            glfw_dlsym(_glfw.wl.libdecor.configuration_get_content_size, _glfw.wl.libdecor.handle, "libdecor_configuration_get_content_size");
+            glfw_dlsym(_glfw.wl.libdecor.configuration_get_window_state, _glfw.wl.libdecor.handle, "libdecor_configuration_get_window_state");
+
+            if (_glfw.wl.libdecor.new_ && _glfw.wl.libdecor.unref &&
+                _glfw.wl.libdecor.get_fd && _glfw.wl.libdecor.dispatch &&
+                _glfw.wl.libdecor.decorate && _glfw.wl.libdecor.frame_unref &&
+                _glfw.wl.libdecor.frame_set_app_id && _glfw.wl.libdecor.frame_set_title &&
+                _glfw.wl.libdecor.frame_set_minimized && _glfw.wl.libdecor.frame_set_maximized &&
+                _glfw.wl.libdecor.frame_unset_maximized && _glfw.wl.libdecor.frame_set_fullscreen &&
+                _glfw.wl.libdecor.frame_unset_fullscreen &&
+                _glfw.wl.libdecor.frame_set_min_content_size && _glfw.wl.libdecor.frame_set_max_content_size &&
+                _glfw.wl.libdecor.frame_commit && _glfw.wl.libdecor.frame_get_xdg_surface &&
+                _glfw.wl.libdecor.frame_get_xdg_toplevel && _glfw.wl.libdecor.frame_map &&
+                _glfw.wl.libdecor.state_new && _glfw.wl.libdecor.state_free &&
+                _glfw.wl.libdecor.configuration_get_content_size &&
+                _glfw.wl.libdecor.configuration_get_window_state) {
+                _glfw.wl.libdecor.context = _glfw.wl.libdecor.new_(_glfw.wl.display, &_glfwLibdecorInterface);
+                if (_glfw.wl.libdecor.context) {
+                    _glfw.wl.libdecor.dispatch(_glfw.wl.libdecor.context, 0);
+                    int libdecor_fd = _glfw.wl.libdecor.get_fd(_glfw.wl.libdecor.context);
+                    _glfw.wl.libdecor.watchId = addWatch(&_glfw.wl.eventLoopData, "libdecor", libdecor_fd, POLLIN, 1, NULL, NULL);
+                    _glfw.wl.libdecor.ready = true;
+                    _glfw_libdecor_was_loaded = true;
+                    debug("libdecor: loaded and initialized (no server-side decoration support from compositor)\n");
+                } else {
+                    _glfw_dlclose(_glfw.wl.libdecor.handle);
+                    _glfw.wl.libdecor.handle = NULL;
+                    debug("libdecor: failed to create context\n");
+                }
+            } else {
+                _glfw_dlclose(_glfw.wl.libdecor.handle);
+                _glfw.wl.libdecor.handle = NULL;
+                debug("libdecor: failed to load required symbols\n");
+            }
+        }
+    }
+
     for (i = 0; i < _glfw.monitorCount; ++i)
     {
         monitor = _glfw.monitors[i];
@@ -910,6 +996,19 @@ void _glfwPlatformTerminate(void)
         free(_glfw.wl.activation_requests.array);
     }
     _glfwTerminateEGL();
+
+    // Destroy libdecor context BEFORE any Wayland globals — libdecor owns
+    // internal copies of wl_registry/xdg_wm_base that reference the display.
+    if (_glfw.wl.libdecor.watchId) {
+        removeWatch(&_glfw.wl.eventLoopData, _glfw.wl.libdecor.watchId);
+        _glfw.wl.libdecor.watchId = 0;
+    }
+    if (_glfw.wl.libdecor.context) {
+        _glfw.wl.libdecor.dispatch(_glfw.wl.libdecor.context, 0);
+        _glfw.wl.libdecor.unref(_glfw.wl.libdecor.context);
+        _glfw.wl.libdecor.context = NULL;
+    }
+
     if (_glfw.wl.egl.handle)
     {
         _glfw_dlclose(_glfw.wl.egl.handle);
@@ -1007,6 +1106,14 @@ void _glfwPlatformTerminate(void)
         _glfw.wl.display = NULL;
     }
     finalizePollData(&_glfw.wl.eventLoopData);
+
+    // dlclose libdecor AFTER display disconnect — plugin code may be
+    // referenced by Wayland dispatch tables until the connection is gone.
+    if (_glfw.wl.libdecor.handle) {
+        _glfw_dlclose(_glfw.wl.libdecor.handle);
+        _glfw.wl.libdecor.handle = NULL;
+    }
+
     if (_glfw.wl.compositor_name) {
         free(_glfw.wl.compositor_name);
         _glfw.wl.compositor_name = NULL;

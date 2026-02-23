@@ -570,7 +570,10 @@ create_csd_surfaces(_GLFWwindow *window, _GLFWWaylandCSDSurface *s) {
 
 static bool
 window_is_csd_capable(_GLFWwindow *window) {
-    return window->decorated && !decs.serverSide && window->wl.xdg.toplevel;
+    // When libdecor is active we only use kitty CSD for titlebar-only mode,
+    // because libdecor cannot expose border-only decorations.
+    return window->decorated && !decs.serverSide && window->wl.xdg.toplevel &&
+        (!window->wl.libdecorFrame || decs.titlebar_hidden);
 }
 
 bool

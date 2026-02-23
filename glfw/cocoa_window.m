@@ -3847,6 +3847,7 @@ glfwGetCocoaKeyEquivalent(uint32_t glfw_key, int glfw_mods, int *cocoa_mods) {
 }
 
 GLFWAPI bool glfwIsLayerShellSupported(void) { return true; }
+GLFWAPI bool glfwIsLibdecorLoaded(void) { return false; }
 
 GLFWAPI void
 glfwCocoaCycleThroughOSWindows(bool backwards) {

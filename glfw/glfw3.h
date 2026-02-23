@@ -2106,6 +2106,7 @@ GLFWAPI GLFWcurrentselectionfun glfwSetCurrentSelectionCallback(GLFWcurrentselec
 GLFWAPI GLFWhascurrentselectionfun glfwSetHasCurrentSelectionCallback(GLFWhascurrentselectionfun callback);
 GLFWAPI GLFWimecursorpositionfun glfwSetIMECursorPositionCallback(GLFWimecursorpositionfun callback);
 GLFWAPI bool glfwIsLayerShellSupported(void);
+GLFWAPI bool glfwIsLibdecorLoaded(void);
 
 /*! @brief Terminates the GLFW library.
  *

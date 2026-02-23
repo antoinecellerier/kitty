@@ -1355,7 +1355,10 @@ only hide the titlebar and the rounded corners.
 On Wayland, :code:`titlebar-only` can be used to hide the titlebar while keeping
 the window shadow for resizing. On compositors that have server-side
 decorations (such as anything but GNOME), both :code:`yes` and :code:`titlebar-only` force
-client-side decoration mode.
+client-side decoration mode. On GNOME, kitty uses libdecor (when available) for
+native decorations; in :code:`titlebar-only` mode kitty hides libdecor and uses
+its own CSD resize borders since libdecor does not provide border-only
+decorations.
 
 Whether this works and exactly what effect it has depends on the window manager/operating
 system. Note that the effects of changing this option when reloading config

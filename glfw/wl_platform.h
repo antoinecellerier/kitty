@@ -73,6 +73,8 @@ typedef VkBool32 (APIENTRY *PFN_vkGetPhysicalDeviceWaylandPresentationSupportKHR
 #include "wayland-xdg-toplevel-tag-v1-client-protocol.h"
 #include "wayland-xdg-toplevel-drag-v1-client-protocol.h"
 
+#include "wl_libdecor.h"
+
 #define _glfw_dlopen(name) dlopen(name, RTLD_LAZY | RTLD_LOCAL)
 #define _glfw_dlclose(handle) dlclose(handle)
 #define _glfw_dlsym(handle, name) dlsym(handle, name)
@@ -183,6 +185,7 @@ typedef struct _GLFWwindowWayland
         struct zxdg_toplevel_decoration_v1* decoration;
         struct { int width, height; } top_level_bounds;
     } xdg;
+    struct libdecor_frame*  libdecorFrame;
     struct wp_fractional_scale_v1 *wp_fractional_scale_v1;
     struct wp_viewport *wp_viewport;
     struct org_kde_kwin_blur *org_kde_kwin_blur;
@@ -399,6 +402,46 @@ typedef struct _GLFWlibraryWayland
         PFN_wl_egl_window_destroy window_destroy;
         PFN_wl_egl_window_resize window_resize;
     } egl;
+
+    struct {
+        void*                   handle;
+        struct libdecor*        context;
+        bool                    ready;
+        id_type                 watchId;
+
+        PFN_libdecor_new                       new_;
+        PFN_libdecor_unref                     unref;
+        PFN_libdecor_get_fd                    get_fd;
+        PFN_libdecor_dispatch                  dispatch;
+        PFN_libdecor_decorate                  decorate;
+        PFN_libdecor_frame_unref               frame_unref;
+        PFN_libdecor_frame_set_app_id          frame_set_app_id;
+        PFN_libdecor_frame_set_title           frame_set_title;
+        PFN_libdecor_frame_set_minimized       frame_set_minimized;
+        PFN_libdecor_frame_set_maximized       frame_set_maximized;
+        PFN_libdecor_frame_unset_maximized     frame_unset_maximized;
+        PFN_libdecor_frame_set_fullscreen      frame_set_fullscreen;
+        PFN_libdecor_frame_unset_fullscreen    frame_unset_fullscreen;
+        PFN_libdecor_frame_set_capabilities    frame_set_capabilities;
+        PFN_libdecor_frame_unset_capabilities  frame_unset_capabilities;
+        PFN_libdecor_frame_set_visibility      frame_set_visibility;
+        PFN_libdecor_frame_is_visible          frame_is_visible;
+        PFN_libdecor_frame_is_floating         frame_is_floating;
+        PFN_libdecor_frame_set_max_content_size frame_set_max_content_size;
+        PFN_libdecor_frame_set_min_content_size frame_set_min_content_size;
+        PFN_libdecor_frame_resize              frame_resize;
+        PFN_libdecor_frame_move                frame_move;
+        PFN_libdecor_frame_commit              frame_commit;
+        PFN_libdecor_frame_set_parent          frame_set_parent;
+        PFN_libdecor_frame_get_xdg_surface     frame_get_xdg_surface;
+        PFN_libdecor_frame_get_xdg_toplevel    frame_get_xdg_toplevel;
+        PFN_libdecor_frame_map                 frame_map;
+        PFN_libdecor_frame_translate_coordinate frame_translate_coordinate;
+        PFN_libdecor_state_new                 state_new;
+        PFN_libdecor_state_free                state_free;
+        PFN_libdecor_configuration_get_content_size configuration_get_content_size;
+        PFN_libdecor_configuration_get_window_state configuration_get_window_state;
+    } libdecor;
 
     struct {
         glfw_wl_xdg_activation_request *array;
